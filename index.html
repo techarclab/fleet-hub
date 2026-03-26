@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Fleet Hub v4.1 — Decision Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aws-sdk/2.1692.0/aws-sdk.min.js"></script>
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+    :root {
+      --bg: #030712;
+      --surface: rgba(17, 24, 39, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-light: rgba(255, 255, 255, 0.15);
+      --cyan: #22d3ee;
+      --cyan-glow: rgba(34, 211, 238, 0.4);
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #8b5cf6;
+      --text-main: rgba(255, 255, 255, 0.95);
+      --text-muted: rgba(255, 255, 255, 0.5);
+      --mono: 'DM Mono', monospace;
+      --sans: 'Outfit', sans-serif;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      background-image:
+        radial-gradient(circle at 15% 50%, rgba(34, 211, 238, 0.03) 0%, transparent 50%),
+        radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.03) 0%, transparent 50%);
+      color: var(--text-main);
+      font-family: var(--sans);
+      font-size: 13px;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+    @keyframes slideIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    @keyframes fadeOut { from{opacity:1} to{opacity:0} }
+    @keyframes floatUp { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-8px)} 40%,80%{transform:translateX(8px)} }
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100vh); }
+    }
+
+    /* ─── Login Overlay ──────────────────────────────────────────────────── */
+    #loginOverlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #030712;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    /* Animated grid background */
+    #loginOverlay::before {
+      content: '';
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(34,211,238,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(34,211,238,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      animation: fadeIn 1.5s ease-out forwards;
+    }
+    /* Glowing radial center */
+    #loginOverlay::after {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 50%, rgba(34,211,238,0.07) 0%, transparent 70%),
+        radial-gradient(circle at 20% 80%, rgba(139,92,246,0.05) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(34,211,238,0.04) 0%, transparent 50%);
+    }
+    /* Moving scanline */
+    .login-scan {
+      position: absolute; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(34,211,238,0.15), transparent);
+      animation: scanline 4s linear infinite;
+      pointer-events: none; z-index: 1;
+    }
+
+    .login-card {
+      position: relative; z-index: 2;
+      width: 100%; max-width: 380px;
+      padding: 40px 36px;
+      background: rgba(17,24,39,0.85);
+      border: 1px solid rgba(34,211,238,0.2);
+      border-radius: 16px;
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      box-shadow:
+        0 0 0 1px rgba(34,211,238,0.05),
+        0 24px 64px rgba(0,0,0,0.6),
+        0 0 80px rgba(34,211,238,0.06);
+      animation: floatUp 0.6s cubic-bezier(0.16,1,0.3,1) forwards;
+    }
+
+    .login-logo {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 32px;
+    }
+    .login-logo-icon {
+      width: 44px; height: 44px;
+      background: linear-gradient(135deg, var(--cyan), #0284c7);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 0 24px var(--cyan-glow);
+    }
+    .login-brand { display: flex; flex-direction: column; }
+    .login-brand-name { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; }
+    .login-brand-sub { font-size: 10px; color: var(--text-muted); letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; margin-top: 1px; }
+
+    .login-title {
+      font-size: 13px; font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .login-field { margin-bottom: 16px; }
+    .login-label {
+      display: block;
+      font-size: 10px; font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      margin-bottom: 7px;
+    }
+    .login-input-wrap { position: relative; }
+    .login-input {
+      width: 100%;
+      padding: 11px 14px 11px 38px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      color: var(--text-main);
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      letter-spacing: 0.5px;
+    }
+    .login-input:focus {
+      border-color: rgba(34,211,238,0.5);
+      background: rgba(34,211,238,0.04);
+      box-shadow: 0 0 0 3px rgba(34,211,238,0.08);
+    }
+    .login-input::placeholder { color: rgba(255,255,255,0.2); font-family: var(--sans); font-size: 12px; letter-spacing: 0; }
+    .login-icon {
+      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+      font-size: 14px; opacity: 0.4; pointer-events: none;
+    }
+    /* Password toggle */
+    .pw-toggle {
+      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: var(--text-muted);
+      cursor: pointer; font-size: 13px; padding: 2px;
+      transition: color 0.2s; line-height: 1;
+    }
+    .pw-toggle:hover { color: var(--cyan); }
+
+    .login-error {
+      display: none;
+      font-size: 11px; font-weight: 600;
+      color: var(--red);
+      background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      text-align: center;
+      animation: shake 0.4s ease-out;
+    }
+    .login-error.show { display: block; }
+
+    .login-btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #0891b2, #0284c7);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+      box-shadow: 0 4px 16px rgba(8,145,178,0.35);
+      margin-top: 4px;
+    }
+    .login-btn:hover { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(8,145,178,0.45); }
+    .login-btn:active { transform: translateY(0); }
+
+    .login-footer {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 10px;
+      color: rgba(255,255,255,0.2);
+      letter-spacing: 0.5px;
+    }
+
+    /* Fade-out transition when login succeeds */
+    #loginOverlay.leaving {
+      animation: fadeOut 0.5s ease-out forwards;
+      pointer-events: none;
+    }
+
+    /* Dashboard hidden until logged in */
+    #appShell { display: none; width: 100%; height: 100%; flex-direction: column; }
+
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    .leaflet-control-attribution,
+    .leaflet-control-zoom { display: none !important; }
+
+    /* ─── Critical Banner ─── */
+    #critBanner {
+      display: none;
+      background: linear-gradient(90deg, rgba(239,68,68,0.95), rgba(220,38,38,0.95));
+      color: white;
+      text-align: center;
+      padding: 10px 48px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      z-index: 2000;
+      box-shadow: 0 4px 16px rgba(239,68,68,0.4);
+      animation: slideIn 0.3s ease-out;
+      position: relative;
+      font-size: 12px;
+    }
+    #critBanner::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        -45deg, transparent, transparent 8px,
+        rgba(0,0,0,0.04) 8px, rgba(0,0,0,0.04) 16px
+      );
+    }
+    #critBanner button {
+      position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+      background: rgba(255,255,255,0.2); border: none; color: white;
+      font-size: 12px; cursor: pointer; opacity: 0.9; border-radius: 4px;
+      width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s; z-index: 1;
+    }
+    #critBanner button:hover { background: rgba(255,255,255,0.35); }
+
+    /* ─── Header ─── */
+    .hdr {
+      padding: 10px 20px;
+      background: rgba(3, 7, 18, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1000;
+      flex-shrink: 0;
+    }
+    .hdr-left { display: flex; align-items: center; gap: 14px; }
+    .logo {
+      width: 34px; height: 34px;
+      background: linear-gradient(135deg, var(--cyan), #0284c7);
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px;
+      box-shadow: 0 0 20px var(--cyan-glow);
+      flex-shrink: 0;
+    }
+    .brand-name { font-size: 15px; font-weight: 800; letter-spacing: 0.5px; }
+    .brand-sub { font-size: 9px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
+    .conn {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 10px; font-weight: 700; font-family: var(--mono);
+      padding: 4px 10px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 20px; border: 1px solid var(--border);
+      letter-spacing: 0.5px;
+    }
+    .conn-dot { width: 7px; height: 7px; border-radius: 50%; animation: pulse 2s infinite ease-in-out; }
+    .hdr-right { display: flex; gap: 20px; }
+    .hdr-m { text-align: right; }
+    .hdr-ml { font-size: 9px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
+    .hdr-mv { font-size: 12px; font-weight: 600; font-family: var(--mono); }
+
+    /* ─── Layout ─── */
+    .dash {
+      flex: 1;
+      padding: 14px;
+      display: grid;
+      gap: 14px;
+      overflow: hidden;
+      grid-template-columns: 1fr 340px;
+    }
+    .left { display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+    .right { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding-right: 4px; }
+
+    /* ─── Cards ─── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+    }
+    .card-t {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin-bottom: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+    }
+    .card-t::before {
+      content: '';
+      display: inline-block;
+      width: 5px; height: 5px;
+      background: var(--cyan);
+      border-radius: 50%;
+      margin-right: 8px;
+      box-shadow: 0 0 8px var(--cyan);
+    }
+
+    /* ─── Map ─── */
+    .map-wrap {
+      flex: 1;
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      position: relative;
+      min-height: 250px;
+      transition: all 0.3s;
+    }
+    .map-wrap.fullscreen {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      z-index: 9999; border-radius: 0; border: none;
+    }
+    #fleet-map { width: 100%; height: 100%; background: #0b1120; z-index: 1; }
+
+    .map-ov { position: absolute; z-index: 400; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .map-badge {
+      top: 12px; left: 12px;
+      background: rgba(17,24,39,0.82);
+      border: 1px solid rgba(34,211,238,0.3);
+      border-radius: 20px;
+      padding: 5px 12px;
+      display: flex; align-items: center; gap: 7px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .map-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); animation: pulse 2s infinite; box-shadow: 0 0 6px var(--cyan); }
+    .map-badge-txt { font-size: 9px; color: var(--cyan); font-weight: 800; letter-spacing: 1.2px; }
+
+    /* ─── Map Controls ─── */
+    .map-ctrls { position: absolute; top: 12px; right: 12px; z-index: 400; display: flex; gap: 6px; }
+    .map-btn {
+      background: rgba(17,24,39,0.85);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: var(--text-main);
+      border-radius: var(--radius-sm);
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: 0.2s; font-size: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .map-btn:hover { background: rgba(34,211,238,0.15); border-color: var(--cyan); color: var(--cyan); }
+    .map-btn.active { background: rgba(34,211,238,0.2); border-color: var(--cyan); color: var(--cyan); }
+
+    /* Theme toggle button label */
+    .map-btn[data-theme] { font-size: 14px; width: auto; padding: 0 10px; font-family: var(--sans); font-size: 10px; font-weight: 700; gap: 4px; letter-spacing: 0.5px; }
+
+    .map-info {
+      bottom: 12px; left: 12px; right: 12px;
+      background: rgba(3,7,18,0.88);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .map-wrap.fullscreen .map-info { right: auto; width: calc(100% - 24px); max-width: 600px; }
+    .map-il { font-size: 9px; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px; margin-bottom: 2px; text-transform: uppercase; }
+    .map-iv { font-size: 13px; font-weight: 500; font-family: var(--mono); }
+
+    /* ─── Stats Row ─── */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+    .stat { position: relative; padding: 14px 12px; justify-content: center; }
+    .stat .bar { position: absolute; top: 0; left: 0; width: 3px; height: 100%; border-radius: var(--radius-md) 0 0 var(--radius-md); }
+    .stat-v { font-size: 24px; font-weight: 300; font-family: var(--mono); line-height: 1; margin: 4px 0; }
+    .stat-s { font-size: 10px; color: var(--text-muted); font-weight: 500; }
+
+    /* ─── Info rows ─── */
+    .info-r { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+    .info-r:last-child { border: none; padding-bottom: 0; }
+    .info-k { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+    .info-v { font-size: 11px; font-weight: 600; font-family: var(--mono); }
+
+    /* ─── Alerts ─── */
+    .alert-feed { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1; }
+    .alert-item {
+      display: grid; grid-template-columns: auto auto 1fr;
+      gap: 8px; align-items: center;
+      padding: 7px 8px;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      animation: slideIn 0.3s;
+      transition: opacity 0.2s;
+    }
+    .alert-time { font-size: 10px; color: var(--text-muted); font-family: var(--mono); white-space: nowrap; }
+    .alert-badge { font-size: 9px; padding: 2px 7px; border-radius: 4px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; white-space: nowrap; }
+    .alert-msg { font-size: 11px; font-weight: 500; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ─── Score Ring ─── */
+    .score-ring { position: relative; display: inline-flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 10px rgba(0,0,0,0.5)); flex-shrink: 0; }
+    .score-val { position: absolute; font-size: 20px; font-weight: 700; font-family: var(--mono); }
+
+    .empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 20px 0; font-style: italic; }
+
+    /* ─── TPMS Grid ─── */
+    .tpms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tpms-tile {
+      padding: 11px; border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      display: flex; flex-direction: column; align-items: center;
+      transition: border-color 0.3s, background 0.3s;
+      animation: fadeIn 0.4s ease-out;
+    }
+    .tpms-tile.warn { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.05); }
+    .tpms-tile.offline { border-color: rgba(239,68,68,0.25); background: rgba(239,68,68,0.04); }
+    .tpms-name { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+    .tpms-psi { font-size: 17px; font-weight: 700; font-family: var(--mono); margin-top: 4px; }
+    .tpms-psi span { font-size: 9px; color: var(--text-muted); font-weight: 500; }
+    .tpms-temp { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .tpms-offline-lbl { color: var(--red); font-weight: 800; font-size: 11px; margin-top: 6px; letter-spacing: 0.5px; }
+
+    /* ─── Divider ─── */
+    .divider { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 900px) {
+      body { overflow: auto; height: auto; }
+      .hdr { flex-direction: column; gap: 12px; align-items: flex-start; position: sticky; top: 0; }
+      .hdr-right { width: 100%; justify-content: space-between; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+      .hdr-m { text-align: left; flex-shrink: 0; }
+      .dash { display: flex; flex-direction: column; height: auto; overflow: visible; }
+      .left, .right { overflow: visible; }
+      .map-wrap { min-height: 40vh; flex: none; }
+      .map-wrap.fullscreen { min-height: 100vh; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── LOGIN SCREEN ─────────────────────────────────────────────────────── -->
+  <div id="loginOverlay">
+    <div class="login-scan"></div>
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="login-logo-icon">🚛</div>
+        <div class="login-brand">
+          <div class="login-brand-name">FLEET HUB</div>
+          <div class="login-brand-sub">Cloud Harbor Technologies</div>
+        </div>
+      </div>
+
+      <div class="login-title">Sign in to access the Decision Dashboard</div>
+
+      <div class="login-field">
+        <label class="login-label" for="loginUser">Username</label>
+        <div class="login-input-wrap">
+          <span class="login-icon">👤</span>
+          <input id="loginUser" class="login-input" type="text" placeholder="Enter username" autocomplete="username" spellcheck="false" />
+        </div>
+      </div>
+
+      <div class="login-field">
+        <label class="login-label" for="loginPass">Password</label>
+        <div class="login-input-wrap">
+          <span class="login-icon">🔒</span>
+          <input id="loginPass" class="login-input" type="password" placeholder="Enter password" autocomplete="current-password" />
+          <button class="pw-toggle" id="pwToggle" type="button" title="Show / Hide password">👁</button>
+        </div>
+      </div>
+
+      <div class="login-error" id="loginError">⚠ Invalid username or password</div>
+
+      <button class="login-btn" id="loginBtn">Access Dashboard →</button>
+
+      <div class="login-footer">ARC LABS · FLEET MANAGEMENT PLATFORM · v4.1</div>
+    </div>
+  </div>
+
+  <!-- ─── MAIN APP SHELL (hidden until login) ─────────────────────────────── -->
+  <div id="appShell">
+
+  <div id="critBanner">
+    <span id="critBannerText">⚠️ CRITICAL ALERT</span>
+    <button onclick="this.parentElement.style.display='none'">✕</button>
+  </div>
+
+  <div class="hdr">
+    <div class="hdr-left">
+      <div class="logo">🚛</div>
+      <div>
+        <div class="brand-name">FLEET HUB</div>
+        <div class="brand-sub">Cloud Harbor Technologies</div>
+      </div>
+      <div class="divider"></div>
+      <div class="conn">
+        <div class="conn-dot" id="cDot" style="background:var(--amber)"></div>
+        <span id="cLbl" style="color:var(--amber)">CONNECTING…</span>
+      </div>
+    </div>
+    <div class="hdr-right">
+      <div class="hdr-m">
+        <div class="hdr-ml">Vehicle ID</div>
+        <div class="hdr-mv" id="hVehicle">AP09AB1234</div>
+      </div>
+      <div class="hdr-m">
+        <div class="hdr-ml">Device</div>
+        <div class="hdr-mv" id="hDev" style="color:var(--cyan)">—</div>
+      </div>
+      <div class="hdr-m">
+        <div class="hdr-ml">Last Seen</div>
+        <div class="hdr-mv" id="hTime">—</div>
+      </div>
+      <div class="hdr-m">
+        <div class="hdr-ml">Safety Score</div>
+        <div class="hdr-mv" id="hScore" style="color:var(--green)">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dash">
+    <div class="left">
+      <div class="map-wrap" id="mapWrap">
+        <div id="fleet-map"></div>
+        <div class="map-ov map-badge">
+          <div class="map-badge-dot"></div>
+          <span class="map-badge-txt">LIVE TRACKING</span>
+        </div>
+        <div class="map-ctrls">
+          <!-- Map Theme Cycle Button -->
+          <button id="themeBtn" class="map-btn" title="Switch Map Theme">🌙 DARK</button>
+          <button id="fsBtn" class="map-btn" title="Toggle Fullscreen">⛶</button>
+        </div>
+        <div class="map-ov map-info">
+          <div><div class="map-il">LAT</div><div class="map-iv" id="mLat">—</div></div>
+          <div><div class="map-il">LNG</div><div class="map-iv" id="mLng">—</div></div>
+          <div><div class="map-il">SPD (km/h)</div><div class="map-iv" id="mSpd" style="color:var(--cyan)">—</div></div>
+          <div><div class="map-il">HDG</div><div class="map-iv" id="mHdg">—</div></div>
+          <div><div class="map-il">ALT (m)</div><div class="map-iv" id="mAlt">—</div></div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="card stat">
+          <div class="bar" style="background:var(--cyan)"></div>
+          <div class="card-t">Speed</div>
+          <div class="stat-v" id="sSpd">—</div>
+          <div class="stat-s">km/h</div>
+        </div>
+        <div class="card stat">
+          <div class="bar" id="sSigBar" style="background:var(--green)"></div>
+          <div class="card-t">Signal</div>
+          <div class="stat-v" id="sSig">—</div>
+          <div class="stat-s" id="sDbm">—</div>
+        </div>
+        <div class="card stat">
+          <div class="bar" style="background:var(--green)"></div>
+          <div class="card-t">Satellites</div>
+          <div class="stat-v" id="sSat">—</div>
+          <div class="stat-s" id="sFix">—</div>
+        </div>
+        <div class="card stat">
+          <div class="bar" style="background:var(--amber)"></div>
+          <div class="card-t">Alerts</div>
+          <div class="stat-v" id="sAlert">0</div>
+          <div class="stat-s" id="sAlertS">—</div>
+        </div>
+      </div>
+
+      <div class="card" style="flex: 0 0 auto; height: 150px;">
+        <div class="card-t">Speed History (Recent)</div>
+        <div style="flex:1; position:relative; width:100%; height:100%;">
+          <canvas id="speedChart" style="position:absolute; top:0; left:0; width:100%; height:100%;"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="card">
+        <div class="card-t">Driver Behavior Score</div>
+        <div style="display:flex; align-items:center; gap: 18px;">
+          <div class="score-ring">
+            <svg id="scoreRing" width="88" height="88" viewBox="0 0 90 90"></svg>
+            <span class="score-val" id="scoreVal">—</span>
+          </div>
+          <div style="flex:1;">
+            <div class="info-r"><span class="info-k">Harsh Accel</span><span class="info-v" id="dAccel">0</span></div>
+            <div class="info-r"><span class="info-k">Harsh Brake</span><span class="info-v" id="dBrake">0</span></div>
+            <div class="info-r"><span class="info-k">Harsh Corner</span><span class="info-v" id="dCorner">0</span></div>
+            <div class="info-r"><span class="info-k">Speeding Events</span><span class="info-v" id="dSpeed">0</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-t">Tire Health (TPMS)</div>
+        <div id="tpmsInfo"><div class="empty">No sensor data available</div></div>
+      </div>
+
+      <div class="card" style="flex: 1; min-height: 200px;">
+        <div class="card-t">Priority Alerts</div>
+        <div id="alertFeed" class="alert-feed"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── CONFIG ───────────────────────────────────────────────────────────────
+    const CFG = {
+      region: 'ap-south-1',
+      pool: 'ap-south-1:54907701-a8f2-4902-98b3-4cce8068029c',
+      endpoint: 'a2s18q24k203dr-ats.iot.ap-south-1.amazonaws.com',
+      devId: 'hub-prototype-001'
+    };
+    const TOPICS = { wild: 'dt/fleet/' + CFG.devId + '/#', alerts: 'dt/fleet/' + CFG.devId + '/alerts' };
+
+    // ─── YOUR 4 REGISTERED TPMS SENSORS ─────────────────────────────────────
+    // Only these 4 MACs are shown. Unknown MACs are silently ignored.
+    // If a known MAC sends invalid data (psi<=0 or tempC<=0), it shows OFFLINE.
+    const TPMS_MAP = {
+      '80:EA:CA:03:3E:D3': 'Front Left',
+      '80:EA:CA:03:3F:36': 'Front Right',
+      '80:EA:CA:03:3E:BD': 'Rear Left',
+      '80:EA:CA:03:3E:AC': 'Rear Right'
+    };
+    // Order for display (top-left, top-right, bottom-left, bottom-right)
+    const TPMS_ORDER = ['80:EA:CA:03:3E:D3','80:EA:CA:03:3F:36','80:EA:CA:03:3E:BD','80:EA:CA:03:3E:AC'];
+
+    // ─── STATE ────────────────────────────────────────────────────────────────
+    let mqttC = null, map = null, marker = null, startMarker = null, pathLine = null;
+    let pathPts = [], speedHistory = [], storedAlerts = [];
+    let currentTileLayer = null;
+    let currentThemeIdx = 0; // 0=dark, 1=light, 2=satellite
+
+    // ─── MAP THEME DEFINITIONS ────────────────────────────────────────────────
+    const MAP_THEMES = [
+      {
+        label: '🌙 DARK',
+        layer: () => L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }),
+        pathColor: '#22d3ee',
+        markerColor: 'var(--cyan)',
+        markerGlow: 'var(--cyan)',
+        startColor: 'var(--green)',
+        infoStyle: 'background: rgba(3,7,18,0.88); border-color: rgba(255,255,255,0.08);'
+      },
+      {
+        label: '☀️ LIGHT',
+        layer: () => L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }),
+        pathColor: '#0284c7',
+        markerColor: '#0284c7',
+        markerGlow: '#22d3ee',
+        startColor: '#10b981',
+        infoStyle: 'background: rgba(255,255,255,0.92); border-color: rgba(0,0,0,0.1);'
+      },
+      {
+        label: '🛰️ SAT',
+        layer: () => L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }),
+        pathColor: '#fbbf24',
+        markerColor: '#fbbf24',
+        markerGlow: '#f59e0b',
+        startColor: '#10b981',
+        infoStyle: 'background: rgba(3,7,18,0.88); border-color: rgba(255,255,255,0.08);'
+      }
+    ];
+
+    // ─── STORAGE ──────────────────────────────────────────────────────────────
+    const STORAGE_KEYS = { trail: 'fh_trail', lastTelem: 'fh_telem', alerts: 'fh_alerts', speeds: 'fh_speeds' };
+    const MAX_STORED_TRAIL = 500; const MAX_STORED_ALERTS = 50;
+
+    function saveTrail() {
+      try {
+        localStorage.setItem(STORAGE_KEYS.trail, JSON.stringify(pathPts.slice(-MAX_STORED_TRAIL)));
+        localStorage.setItem(STORAGE_KEYS.speeds, JSON.stringify(speedHistory));
+      } catch(e){}
+    }
+    function loadTrail() {
+      try {
+        const d = localStorage.getItem(STORAGE_KEYS.trail);
+        const s = localStorage.getItem(STORAGE_KEYS.speeds);
+        if (s) speedHistory = JSON.parse(s);
+        if (d) { pathPts = JSON.parse(d); return true; }
+      } catch(e){} return false;
+    }
+    function saveLastTelemetry(data) { try { data._savedAt = Date.now(); localStorage.setItem(STORAGE_KEYS.lastTelem, JSON.stringify(data)); } catch(e){} }
+    function loadLastTelemetry() { try { const d = localStorage.getItem(STORAGE_KEYS.lastTelem); if (d) return JSON.parse(d); } catch(e){} return null; }
+    function saveAlerts(a) { try { localStorage.setItem(STORAGE_KEYS.alerts, JSON.stringify(a.slice(-MAX_STORED_ALERTS))); } catch(e){} }
+    function loadAlerts() { try { const d = localStorage.getItem(STORAGE_KEYS.alerts); if (d) return JSON.parse(d); } catch(e){} return []; }
+
+    // ─── LIVE LAST SEEN TIMER ─────────────────────────────────────────────────
+    setInterval(() => {
+      const last = loadLastTelemetry();
+      if (last && last._savedAt) {
+        const sec = Math.floor((Date.now() - last._savedAt) / 1000);
+        const timeEl = document.getElementById('hTime');
+        timeEl.textContent = sec < 60 ? `${sec}s ago` : `${Math.floor(sec/60)}m ${sec%60}s ago`;
+        timeEl.style.color = sec > 120 ? 'var(--red)' : 'var(--text-main)';
+      }
+    }, 1000);
+
+    // ─── SPEED CHART ──────────────────────────────────────────────────────────
+    function drawSpeedChart() {
+      const canvas = document.getElementById('speedChart');
+      if (!canvas) return;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width; canvas.height = rect.height;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      if (speedHistory.length < 2) return;
+      const maxSpeed = Math.max(80, ...speedHistory) * 1.2;
+      const stepX = w / Math.max(1, speedHistory.length - 1);
+      ctx.beginPath();
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      speedHistory.forEach((spd, i) => {
+        const x = i * stepX, y = h - (spd / maxSpeed) * h;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, 'rgba(34,211,238,0.28)');
+      grad.addColorStop(1, 'rgba(34,211,238,0.0)');
+      ctx.lineTo(w, h); ctx.lineTo(0, h);
+      ctx.fillStyle = grad; ctx.fill();
+    }
+
+    // ─── MAP INIT ─────────────────────────────────────────────────────────────
+    function buildMarkerIcon(color, glow, size = 20) {
+      return L.divIcon({
+        className: '',
+        html: `<div style="width:${size}px;height:${size}px;background:${color};border-radius:50%;border:3px solid #060a13;box-shadow:0 0 16px ${glow};"></div>`,
+        iconSize: [size, size], iconAnchor: [size/2, size/2]
+      });
+    }
+
+    function initMap() {
+      const hadTrail = loadTrail();
+      const center = pathPts.length > 0 ? pathPts[pathPts.length - 1] : [17.3117, 78.5824];
+      const theme = MAP_THEMES[0];
+
+      currentTileLayer = theme.layer();
+      map = L.map('fleet-map', {
+        center, zoom: 15,
+        zoomControl: false,
+        attributionControl: false,
+        layers: [currentTileLayer]
+      });
+
+      marker = L.marker(center, { icon: buildMarkerIcon(theme.markerColor, theme.markerGlow, 20) }).addTo(map);
+      pathLine = L.polyline(pathPts, { color: theme.pathColor, weight: 3, opacity: 0.65 }).addTo(map);
+
+      if (hadTrail && pathPts.length > 0) {
+        startMarker = L.marker(pathPts[0], { icon: buildMarkerIcon(theme.startColor, theme.startColor, 16) }).addTo(map);
+        map.fitBounds(L.latLngBounds(pathPts), { padding: [30, 30], maxZoom: 16 });
+      }
+
+      window.addEventListener('resize', () => { setTimeout(() => { map.invalidateSize(); drawSpeedChart(); }, 100); });
+
+      // ─── FULLSCREEN TOGGLE ─────────────────────────────────────────────────
+      document.getElementById('fsBtn').addEventListener('click', function() {
+        const wrap = document.getElementById('mapWrap');
+        wrap.classList.toggle('fullscreen');
+        this.textContent = wrap.classList.contains('fullscreen') ? '✕' : '⛶';
+        setTimeout(() => { if (map) map.invalidateSize(); }, 350);
+      });
+
+      // ─── MAP THEME CYCLE BUTTON ────────────────────────────────────────────
+      document.getElementById('themeBtn').addEventListener('click', function() {
+        currentThemeIdx = (currentThemeIdx + 1) % MAP_THEMES.length;
+        const theme = MAP_THEMES[currentThemeIdx];
+
+        // Swap tile layer
+        map.removeLayer(currentTileLayer);
+        currentTileLayer = theme.layer();
+        currentTileLayer.addTo(map);
+
+        // Update path + marker colors
+        pathLine.setStyle({ color: theme.pathColor });
+        marker.setIcon(buildMarkerIcon(theme.markerColor, theme.markerGlow, 20));
+        if (startMarker) startMarker.setIcon(buildMarkerIcon(theme.startColor, theme.startColor, 16));
+
+        // Update button label
+        this.textContent = theme.label;
+
+        // Update map info panel text color for light theme readability
+        const infoPanel = document.querySelector('.map-info');
+        if (currentThemeIdx === 1) {
+          // Light theme — darken the info bar text for contrast
+          infoPanel.style.background = 'rgba(255,255,255,0.92)';
+          infoPanel.style.borderColor = 'rgba(0,0,0,0.12)';
+          infoPanel.querySelectorAll('.map-il').forEach(el => el.style.color = 'rgba(0,0,0,0.45)');
+          infoPanel.querySelectorAll('.map-iv').forEach(el => el.style.color = 'rgba(0,0,0,0.85)');
+          document.getElementById('mSpd').style.color = '#0284c7';
+        } else {
+          // Dark / Satellite — restore defaults
+          infoPanel.style.background = 'rgba(3,7,18,0.88)';
+          infoPanel.style.borderColor = 'rgba(255,255,255,0.08)';
+          infoPanel.querySelectorAll('.map-il').forEach(el => el.style.color = 'rgba(255,255,255,0.5)');
+          infoPanel.querySelectorAll('.map-iv').forEach(el => el.style.color = 'rgba(255,255,255,0.95)');
+          document.getElementById('mSpd').style.color = 'var(--cyan)';
+        }
+      });
+    }
+
+    function updateMap(lat, lng) {
+      if (!map) return;
+      const theme = MAP_THEMES[currentThemeIdx];
+      if (pathPts.length === 0 && !startMarker) {
+        startMarker = L.marker([lat, lng], { icon: buildMarkerIcon(theme.startColor, theme.startColor, 16) }).addTo(map);
+      }
+      marker.setLatLng([lat, lng]);
+      map.setView([lat, lng], map.getZoom(), { animate: true, duration: .5 });
+      pathPts.push([lat, lng]);
+      if (pathPts.length > MAX_STORED_TRAIL) pathPts.shift();
+      pathLine.setLatLngs(pathPts);
+      if (pathPts.length % 5 === 0) saveTrail();
+    }
+
+    // ─── HELPERS ──────────────────────────────────────────────────────────────
+    function csqClr(c) { return c>=20?'var(--green)':c>=15?'#84cc16':c>=10?'var(--amber)':c>=5?'#f97316':'var(--red)'; }
+    function setConn(s, l) {
+      const c = { connected:'var(--green)', connecting:'var(--amber)', error:'var(--red)' };
+      document.getElementById('cDot').style.background = c[s]||'var(--amber)';
+      const el = document.getElementById('cLbl');
+      el.style.color = c[s]||'var(--amber)'; el.textContent = l;
+    }
+    function timeStr(d) {
+      d = d || new Date();
+      return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+    }
+
+    // ─── SCORE RING ───────────────────────────────────────────────────────────
+    function drawScoreRing(score) {
+      const svg = document.getElementById('scoreRing'); if (!svg) return;
+      const pct = score/100, r=38, cx=45, cy=45;
+      const color = score>=80?'var(--green)':score>=60?'#84cc16':score>=40?'var(--amber)':'var(--red)';
+      const circ = 2*Math.PI*r, off = circ*(1-pct);
+      svg.innerHTML = `
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6"/>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="6"
+          stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${off}"
+          transform="rotate(-90 ${cx} ${cy})"
+          style="transition:all .8s ease-out; filter:drop-shadow(0 0 4px ${color});"/>`;
+      document.getElementById('scoreVal').textContent = Math.round(score);
+      document.getElementById('scoreVal').style.color = color;
+      document.getElementById('hScore').textContent = Math.round(score);
+      document.getElementById('hScore').style.color = color;
+    }
+
+    // ─── MESSAGE ROUTER ───────────────────────────────────────────────────────
+    function handleMsg(topic, data) {
+      const short = topic.split('/').pop();
+      if (short === 'telemetry') { updateDash(data); saveLastTelemetry(data); }
+      else if (short === 'lwt') { setConn('error', 'DEVICE OFFLINE'); }
+      else if (short === 'alerts') { handleAlert(data); }
+    }
+
+    // ─── ALERT HANDLER ────────────────────────────────────────────────────────
+    function handleAlert(data) {
+      const el = document.getElementById('alertFeed');
+      const t = timeStr();
+      const type = data.alert || 'unknown';
+      let detail = type;
+      if (data.zone) detail += ` — ${data.zone}`;
+      if (data.speed) detail += ` ${data.speed} km/h`;
+      if (data.sensor) detail += ` ${data.sensor}`;
+
+      const typeStr = type.toLowerCase();
+      let severity = 'info';
+      if (typeStr.includes('tpms') || typeStr.includes('harsh') || typeStr.includes('crash')) severity = 'critical';
+      else if (typeStr.includes('speed') || typeStr.includes('geofence')) severity = 'warning';
+
+      const styles = {
+        critical: { bg:'rgba(239,68,68,.12)', border:'rgba(239,68,68,0.25)', fg:'var(--red)' },
+        warning:  { bg:'rgba(245,158,11,.12)', border:'rgba(245,158,11,0.25)', fg:'var(--amber)' },
+        info:     { bg:'rgba(34,211,238,.08)', border:'rgba(34,211,238,0.2)', fg:'var(--cyan)' }
+      };
+      const style = styles[severity];
+
+      if (severity === 'critical') {
+        const banner = document.getElementById('critBanner');
+        document.getElementById('critBannerText').textContent = `⚠️ CRITICAL: ${detail.toUpperCase()}`;
+        banner.style.display = 'block';
+      }
+
+      storedAlerts.push({ t, type, detail, bg: style.bg, border: style.border, fg: style.fg, ts: Date.now() });
+      if (storedAlerts.length > MAX_STORED_ALERTS) storedAlerts.shift();
+      saveAlerts(storedAlerts);
+
+      const d = document.createElement('div'); d.className = 'alert-item';
+      d.style.background = style.bg;
+      d.style.borderColor = style.border;
+      d.innerHTML = `<span class="alert-time">${t}</span>
+        <span class="alert-badge" style="background:rgba(0,0,0,0.2);color:${style.fg}">${type}</span>
+        <span class="alert-msg" style="color:${style.fg}">${detail}</span>`;
+      el.insertBefore(d, el.firstChild);
+      while (el.children.length > 30) el.removeChild(el.lastChild);
+    }
+
+    function restoreAlerts() {
+      storedAlerts = loadAlerts(); if (!storedAlerts.length) return;
+      const el = document.getElementById('alertFeed');
+      storedAlerts.slice(-15).reverse().forEach(a => {
+        const d = document.createElement('div'); d.className = 'alert-item';
+        d.style.background = a.bg;
+        d.style.borderColor = a.border || 'transparent';
+        d.innerHTML = `<span class="alert-time">${a.t}</span>
+          <span class="alert-badge" style="background:rgba(0,0,0,0.2);color:${a.fg}">${a.type}</span>
+          <span class="alert-msg" style="color:${a.fg}">${a.detail}</span>`;
+        el.appendChild(d);
+      });
+    }
+
+    // ─── MAIN DASH UPDATE ─────────────────────────────────────────────────────
+    function updateDash(d) {
+      if (d.deviceId) document.getElementById('hDev').textContent = d.deviceId;
+
+      if (d.gps) {
+        document.getElementById('mLat').textContent = d.gps.lat?.toFixed(6) || '—';
+        document.getElementById('mLng').textContent = d.gps.lng?.toFixed(6) || '—';
+        document.getElementById('mSpd').textContent = (d.gps.speed || 0);
+        document.getElementById('mHdg').textContent = (d.gps.heading || 0).toFixed(1) + '°';
+        document.getElementById('mAlt').textContent = (d.gps.alt || 0).toFixed(0);
+        if (d.gps.fix && d.gps.lat && d.gps.lng) updateMap(d.gps.lat, d.gps.lng);
+        document.getElementById('sSat').textContent = d.gps.sats ?? '—';
+        document.getElementById('sFix').textContent = d.gps.fix ? '3D Fix' : 'No Fix';
+        document.getElementById('sSpd').textContent = d.gps.speed ?? '—';
+        if (d.gps.speed !== undefined) {
+          speedHistory.push(d.gps.speed);
+          if (speedHistory.length > 20) speedHistory.shift();
+          drawSpeedChart();
+        }
+      }
+
+      if (d.signal) {
+        document.getElementById('sSig').textContent = d.signal.csq ?? '—';
+        document.getElementById('sDbm').textContent = (d.signal.dbm || '—') + ' dBm';
+        document.getElementById('sSigBar').style.background = csqClr(d.signal.csq);
+      }
+
+      document.getElementById('sAlert').textContent = d.alertsSent || 0;
+      document.getElementById('sAlertS').textContent = `${d.cmdsRx || 0} cmds rx`;
+
+      if (d.driver) {
+        drawScoreRing(d.driver.score || 0);
+        document.getElementById('dAccel').textContent = d.driver.harshAccel || 0;
+        document.getElementById('dBrake').textContent = d.driver.harshBrake || 0;
+        document.getElementById('dCorner').textContent = d.driver.harshCorner || 0;
+        document.getElementById('dSpeed').textContent = d.driver.speeding || 0;
+      }
+
+      // ─── TPMS: ONLY SHOW YOUR 4 REGISTERED SENSORS ──────────────────────
+      // Logic:
+      //   • Only render tiles for MACs listed in TPMS_ORDER (your 4 sensors)
+      //   • Unknown MACs from payload are silently ignored
+      //   • If a known sensor sends psi<=0 or tempC<=0 → OFFLINE tile
+      //   • If a known sensor is absent from payload entirely → also OFFLINE
+      //   • Normal range: 25–55 PSI, <80°C → OK; outside → WARNING
+      const tEl = document.getElementById('tpmsInfo');
+
+      if (d.tpms && d.tpms.length > 0) {
+        // Build a lookup map from payload: mac → sensor data
+        const payloadMap = {};
+        d.tpms.forEach(t => { payloadMap[t.mac] = t; });
+
+        const tiles = TPMS_ORDER.map(mac => {
+          const name = TPMS_MAP[mac];
+          const sensor = payloadMap[mac]; // undefined if not in payload
+
+          // Treat absent sensors and invalid readings the same way → OFFLINE
+          const isOffline = !sensor || sensor.psi <= 0 || sensor.tempC <= 0;
+
+          if (isOffline) {
+            return `<div class="tpms-tile offline">
+              <div class="tpms-name">${name}</div>
+              <div class="tpms-offline-lbl">⚠ OFFLINE</div>
+            </div>`;
+          }
+
+          const warn = sensor.psi < 25 || sensor.psi > 55 || sensor.tempC > 80;
+          const color = warn ? 'var(--red)' : 'var(--cyan)';
+
+          return `<div class="tpms-tile ${warn ? 'warn' : ''}">
+            <div class="tpms-name">${name}</div>
+            <div class="tpms-psi" style="color:${color}">${sensor.psi.toFixed(1)} <span>PSI</span></div>
+            <div class="tpms-temp">${sensor.tempC.toFixed(0)}°C</div>
+          </div>`;
+        }).join('');
+
+        tEl.innerHTML = `<div class="tpms-grid">${tiles}</div>`;
+      } else {
+        tEl.innerHTML = '<div class="empty">No sensor data available</div>';
+      }
+    }
+
+    function restoreState() {
+      const last = loadLastTelemetry();
+      if (last) updateDash(last);
+      restoreAlerts();
+      setTimeout(() => drawSpeedChart(), 500);
+    }
+
+    // ─── AWS IOT MQTT ─────────────────────────────────────────────────────────
+    async function connect() {
+      AWS.config.region = CFG.region;
+      AWS.config.credentials = new AWS.CognitoIdentityCredentials({ IdentityPoolId: CFG.pool });
+      try { await new Promise((r,j) => AWS.config.credentials.get(e => e ? j(e) : r())); }
+      catch(e) { setConn('error','AUTH FAILED'); return; }
+      const creds = AWS.config.credentials, host = CFG.endpoint, region = CFG.region;
+      const now = new Date(), ds = now.toISOString().replace(/[:\-]|\.\d{3}/g,'').substring(0,8);
+      const amz = now.toISOString().replace(/[:\-]|\.\d{3}/g,'').substring(0,15)+'Z';
+      const svc = 'iotdevicegateway', scope = `${ds}/${region}/${svc}/aws4_request`, alg = 'AWS4-HMAC-SHA256';
+      const qp = [`X-Amz-Algorithm=${alg}`,`X-Amz-Credential=${encodeURIComponent(creds.accessKeyId+'/'+scope)}`,`X-Amz-Date=${amz}`,`X-Amz-SignedHeaders=host`].sort().join('&');
+      const cr = `GET\n/mqtt\n${qp}\nhost:${host}\n\nhost\n${await sha256('')}`;
+      const sts = `${alg}\n${amz}\n${scope}\n${await sha256(cr)}`;
+      const sk = await getSigKey(creds.secretAccessKey, ds, region, svc);
+      const sig = await hmacHex(sk, sts);
+      let url = `wss://${host}/mqtt?${qp}&X-Amz-Signature=${sig}`;
+      if (creds.sessionToken) url += `&X-Amz-Security-Token=${encodeURIComponent(creds.sessionToken)}`;
+      setConn('connecting','CONNECTING…');
+      mqttC = mqtt.connect(url, { transformWsUrl: u=>u, protocolVersion:4, clean:true, reconnectPeriod:5000, connectTimeout:10000, clientId:'dash-'+Math.random().toString(16).substr(2,8) });
+      mqttC.on('connect', () => { setConn('connected','CONNECTED'); mqttC.subscribe(TOPICS.wild,{qos:0}); });
+      mqttC.on('message', (t,p) => { try { handleMsg(t,JSON.parse(p.toString())); } catch(e){} });
+      mqttC.on('error', () => setConn('error','ERROR'));
+      mqttC.on('close', () => setConn('connecting','RECONNECTING…'));
+    }
+
+    window.addEventListener('beforeunload', () => saveTrail());
+
+    async function sha256(m) { const b=new TextEncoder().encode(m); const h=await crypto.subtle.digest('SHA-256',b); return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+    async function hmac(k,m) { const ck=await crypto.subtle.importKey('raw',k instanceof ArrayBuffer?k:new TextEncoder().encode(k),{name:'HMAC',hash:'SHA-256'},false,['sign']); return await crypto.subtle.sign('HMAC',ck,new TextEncoder().encode(m)); }
+    async function hmacHex(k,m) { const s=await hmac(k,m); return Array.from(new Uint8Array(s)).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+    async function getSigKey(k,d,r,s) { const kd=await hmac('AWS4'+k,d); const kr=await hmac(kd,r); const ks=await hmac(kr,s); return await hmac(ks,'aws4_request'); }
+
+    // ─── LOGIN LOGIC ──────────────────────────────────────────────────────────
+    // NOTE: Credentials stored client-side are visible in source.
+    // Suitable for internal prototype / demo use only.
+    const AUTH = { user: 'arclabs', pass: '12ArC12@' };
+
+    function attemptLogin() {
+      const u = document.getElementById('loginUser').value.trim();
+      const p = document.getElementById('loginPass').value;
+      const errEl = document.getElementById('loginError');
+
+      if (u === AUTH.user && p === AUTH.pass) {
+        errEl.classList.remove('show');
+        const overlay = document.getElementById('loginOverlay');
+        const shell = document.getElementById('appShell');
+        overlay.classList.add('leaving');
+        setTimeout(() => {
+          overlay.style.display = 'none';
+          shell.style.display = 'flex';
+          initMap();
+          restoreState();
+          connect();
+        }, 480);
+      } else {
+        errEl.classList.remove('show');
+        void errEl.offsetWidth; // force reflow so shake animation re-triggers
+        errEl.classList.add('show');
+        document.getElementById('loginPass').value = '';
+        document.getElementById('loginPass').focus();
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('loginBtn').addEventListener('click', attemptLogin);
+      ['loginUser','loginPass'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+          if (e.key === 'Enter') attemptLogin();
+        });
+      });
+      document.getElementById('pwToggle').addEventListener('click', function() {
+        const inp = document.getElementById('loginPass');
+        const isHidden = inp.type === 'password';
+        inp.type = isHidden ? 'text' : 'password';
+        this.textContent = isHidden ? '🙈' : '👁';
+      });
+      document.getElementById('loginUser').focus();
+    });
+  </script>
+
+  </div><!-- /#appShell -->
+</body>
+</html>
